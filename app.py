@@ -1,62 +1,86 @@
 import streamlit as st
-from streamlit_folium import st_folium
-import folium
 import pyrebase
-from datetime import datetime, timedelta
+import pandas as pd
+import numpy as np
+import time
 
-# --- SAYFA TASARIMI ---
-st.set_page_config(page_title="Arı-Uydu Takip", layout="wide")
-st.title("🐝 Arı-Uydu: Akıllı Kovan Tahmin Sistemi")
+# 1. Sayfa Konfigürasyonu
+st.set_page_config(page_title="Arı-Uydu Takip Sistemi", page_icon="🐝", layout="wide")
 
-# Firebase Ayarları (Firebase Console'dan alacağın bilgiler)
-config = {
-    "apiKey": "BURAYA_API_KEY",
-    "authDomain": "PROJEN.firebaseapp.com",
-    "databaseURL": "https://PROJEN-default-rtdb.firebaseio.com",
-    "storageBucket": "PROJEN.appspot.com"
-}
-db = pyrebase.initialize_app(config).database()
+# 2. Firebase Bağlantısı (Hata Kontrollü)
+def firebase_baglan():
+    try:
+        config = st.secrets["firebase"]
+        firebase = pyrebase.initialize_app(config)
+        return firebase.database()
+    except Exception as e:
+        st.error(f"Firebase Hatası: {e}")
+        return None
 
-# --- YAN MENÜ (ABONELİK KONTROLÜ) ---
+db = firebase_baglan()
+
+# 3. Başlık Alanı
+st.title("🛰️ Arı-Uydu Hassas Tarım & Takip")
+st.markdown("---")
+
+# 4. Sol Panel (Abonelik ve Ödeme)
+if "abone_mi" not in st.session_state:
+    st.session_state["abone_mi"] = False
+
 with st.sidebar:
-    st.header("👤 Giriş Paneli")
-    kullanici = st.text_input("Müşteri Adınız:")
-    is_active = False
-
-    if kullanici:
-        # Firebase'den bitiş tarihini kontrol et
-        bitis = db.child("aboneler").child(kullanici).child("bitis").get().val()
-        if bitis and datetime.now() < datetime.strptime(bitis, "%Y-%m-%d"):
-            is_active = True
-            st.success("Abonelik Aktif ✅")
-        else:
-            st.error("Abonelik Süresi Dolmuş ❌")
-            if st.button("50 TL Öde ve Abone Ol"):
-                # Ödeme yapıldığında tarihi 30 gün uzat ve ESP32'ye bildir
-                yeni_tarih = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-                db.child("aboneler").child(kullanici).set({"bitis": yeni_tarih})
-                db.child("toplam_kazanc").set((db.child("toplam_kazanc").get().val() or 0) + 50)
-                db.child("son_abone").set(kullanici)
-                st.rerun()
-
-# --- ANA EKRAN (SADECE ABONE AKTİFSE) ---
-if is_active:
-    tab1, tab2 = st.tabs(["📍 Konum Analizi", "🔍 Otomatik Keşif"])
+    st.header("👤 Kullanıcı Paneli")
+    isim = st.text_input("Adınız Soyadınız:")
+    eposta = st.text_input("E-posta Adresiniz:")
     
-    with tab1:
-        st.subheader("Kovanınızın Yerini Seçin")
-        m = folium.Map(location=[39.0, 35.0], zoom_start=6, tiles='Stamen Terrain')
-        m.add_child(folium.LatLngPopup())
-        map_res = st_folium(m, height=450, width=800)
-        
-        if st.button("Tahmin Al"):
-            # Tahmin mantığını buraya ekleyeceğiz
-            st.info("Tahmin: Bu bölgenin dolma ihtimali YÜKSEK! 🍯")
+    st.info("💡 Uydu verileri için 50 TL abonelik gereklidir.")
+    odeme_yap = st.button("💳 50 TL Öde ve Abone Ol")
 
-    with tab2:
-        st.subheader("En Verimli Noktaları Bul")
-        if st.button("Bölgemdeki En İyi 3 Yeri Göster"):
-            st.write("1. Nokta: %94 Verim Potansiyeli")
-            st.write("2. Nokta: %88 Verim Potansiyeli")
+    if odeme_yap:
+        if isim and eposta:
+            if db:
+                # Veritabanına Kayıt
+                yeni_kayit = {
+                    "ad": isim,
+                    "email": eposta,
+                    "durum": "Aktif",
+                    "tarih": time.ctime()
+                }
+                db.child("aboneler").push(yeni_kayit)
+                # ESP32 için komut
+                db.child("cihaz").update({"son_abone": isim, "komut": "YAK"})
+            
+            st.success(f"Tebrikler {isim}! Ödeme alındı.")
+            st.balloons()
+            st.session_state["abone_mi"] = True
+        else:
+            st.warning("Lütfen tüm alanları doldurunuz!")
+
+# 5. Ana Ekran İçeriği
+if st.session_state["abone_mi"]:
+    st.subheader(f"👋 Hoş geldin {isim}! Güncel Uydu Verilerin:")
+    
+    sol, sag = st.columns(2)
+    
+    with sol:
+        st.write("### 🌿 Bitki Canlılık Haritası (NDVI)")
+        # Tarsus/Mersin koordinat simülasyonu
+        harita_verisi = pd.DataFrame(
+            np.random.randn(10, 2) / [50, 50] + [37.0, 34.8],
+            columns=['lat', 'lon']
+        )
+        st.map(harita_verisi)
+        
+    with sag:
+        st.write("### 📊 Verim Analizi")
+        grafik_verisi = pd.DataFrame(
+            np.random.randn(20, 3), 
+            columns=['Polen', 'Nem', 'Sıcaklık']
+        )
+        st.line_chart(grafik_verisi)
 else:
-    st.warning("Lütfen sol panelden giriş yapın veya aboneliğinizi başlatın.")
+    st.warning("🔒 Lütfen sol panelden 50 TL ödeme yaparak uydu verilerini açın.")
+    st.image("https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=800", caption="Sistem Abonelik Bekliyor")
+
+# 6. Alt Bilgi
+st.markdown("---")
+st.caption("© 2026 Arı-Uydu Teknolojileri | İsmail Barış Danacı")
